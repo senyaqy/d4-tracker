@@ -1,0 +1,11 @@
+# D4 副本计数器 —— 直接依赖（都在清华镜像上，装得很快）
+# 恢复环境:  python -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements.txt
+
+PySide6==6.11.2
+opencv-python-headless==5.0.0.93
+numpy==2.5.3
+mss==10.2.0
+rapidocr-onnxruntime==1.2.3
+
+# 打包才需要
+pyinstaller==6.22.3

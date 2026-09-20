@@ -1,0 +1,24 @@
+# ---- 虚拟环境与打包产物（合计 1.36 GB，绝不能进仓库）----
+.venv/
+dist/
+build/
+*.spec
+
+# ---- 运行时数据（本地计数库、日志、界面设置）----
+data/
+*.log
+
+# ---- 采集到的样本（动辄 1 GB+，且含游戏画面）----
+samples/
+config/hotkeys.json
+
+# ---- Python 缓存 ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

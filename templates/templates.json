@@ -1,0 +1,112 @@
+{
+  "ref_w": 2560,
+  "ref_h": 1440,
+  "text_threshold": 190,
+  "match_threshold": 0.55,
+  "confirm_frames": 2,
+  "items": [
+    {
+      "name": "nightmare_complete",
+      "label": "梦魇地下城",
+      "file": "nightmare_complete.png",
+      "roi": [
+        1080,
+        45,
+        460,
+        85
+      ],
+      "pixels": 4676,
+      "threshold": 111,
+      "polarity": "bright",
+      "density": 0.12,
+      "source": "梦魇地下城-完成-20260920-210543#0"
+    },
+    {
+      "name": "dungeon_complete",
+      "label": "深坑",
+      "file": "dungeon_complete.png",
+      "roi": [
+        1080,
+        45,
+        460,
+        85
+      ],
+      "pixels": 3018,
+      "threshold": 125,
+      "polarity": "bright",
+      "density": 0.077,
+      "source": "深坑-完成-20260920-205936#14"
+    },
+    {
+      "name": "hordes_complete",
+      "label": "炼狱魔潮",
+      "file": "hordes_complete.png",
+      "roi": [
+        1898,
+        45,
+        232,
+        56
+      ],
+      "pixels": 1111,
+      "threshold": 68,
+      "polarity": "bright",
+      "density": 0.086,
+      "source": "炼狱魔潮-完成-20260920-214532#24"
+    },
+    {
+      "name": "kurast_complete",
+      "label": "库拉斯特地下城",
+      "file": "kurast_complete.png",
+      "roi": [
+        2330,
+        603,
+        240,
+        62
+      ],
+      "pixels": 1628,
+      "threshold": 98,
+      "polarity": "bright",
+      "density": 0.114,
+      "source": "库拉斯特地下城-完成-20260920-205019#0"
+    },
+    {
+      "name": "tree_turnin",
+      "label": "秘语之树",
+      "file": "tree_turnin.png",
+      "roi": [
+        1540,
+        685,
+        480,
+        130
+      ],
+      "pixels": 9465,
+      "threshold": 61,
+      "polarity": "bright",
+      "density": 0.152,
+      "source": "秘语之树-交付-20260920-212808#24"
+    },
+    {
+      "name": "lair_complete",
+      "label": "巢穴首领",
+      "file": "lair_complete.png",
+      "roi": [
+        2378,
+        486,
+        128,
+        40
+      ],
+      "pixels": 964,
+      "threshold": 93,
+      "polarity": "bright",
+      "density": 0.188,
+      "source": "巢穴首领-击杀-20260920-220211#12",
+      "search": true,
+      "strip": [
+        1975,
+        484,
+        590,
+        44
+      ]
+    }
+  ]
+}
