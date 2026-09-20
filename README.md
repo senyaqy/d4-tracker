@@ -142,54 +142,6 @@ EXE 在 [Releases](https://github.com/senyaqy/d4-tracker/releases) 页面下载�
   一起改，否则旧计数会"消失"；删除会连同历史一起清掉。
 * 设置存 `data/ui.ini` 而不是注册表：便携、看得见、删掉就重置。
 
-### 打包与界面踩过的坑
-
-* **弹框必须单独上色。** 全局那条 `QWidget{color:浅色}` 会作用到 `QMessageBox`，而它的
-  背景仍走系统浅色主题 —— 白字白底，什么都看不见。现在 QSS 和调色板一起上（调色板
-  负责 QSS 覆盖不到的部分），顺带用 `DwmSetWindowAttribute` 把系统标题栏也刷深，
-  否则深色窗口顶一条白栏很割裂。
-* **标准按钮默认是英文。** Qt 不自动加载中文翻译，`QMessageBox` 会显示 Yes/No。
-  现在在 `apply_theme()` 里装 `qtbase_zh_CN.qm`（优先从包内 `translations/` 找，
-  再退回 Qt 自带路径），打包脚本也显式带上这个文件。
-* **`ResizeToContents` 不会把 `setCellWidget` 的宽度算进列宽。** 放 `−`/`+` 的那一列
-  只按表头"手动"两个字算宽度，结果按钮被挤出去、`+` 直接超出表格右边缘。这一列现在
-  是固定宽度。
-* **打包前必须结束残留实例。** 可写数据就在 exe 旁边（`dist/<name>/data/counts.db`），
-  有实例在跑时 PyInstaller 清理输出目录会报 `WinError 32` —— 那个错完全看不出是这个
-  原因。`build_exe.py` 现在会先 `taskkill` 旧实例。
-* **`--clean` 会删掉整个输出目录。** 我先把单文件版移进 `dist/D4Tracker/` 再打单文件
-  夹版，结果被连带删了。两个版本要都打完再归位。
-* **界面几何不能存注册表。** 第一版用默认的 `QSettings()`（写注册表）。改版布局后窗口
-  尺寸被旧值钉死，表现为"所有表格被压扁、活动表只露一行半"，而用户既看不到也删不掉
-  那个值。改存 `data/ui.ini` 后删除文件即可重置。
-* **`resize()` 要放在布局构建之后。** 布局一装上，它的最小尺寸需求就会覆盖先前设的尺寸。
-  第一版把 `resize()` 写在建布局之前，窗口一直停在最小尺寸，控件全被按比例压缩。
-* **别让布局的最小高度超过窗口。** 一次排查打印出 `窗口=960x880  minHint=995x956` ——
-  需求比窗口还大，Qt 只能压缩所有控件。表格的 `setMinimumHeight` 要按行数算，并且
-  给可压缩的标签设 `QSizePolicy.Ignored`（分数区就是改成两列网格才腾出高度）。
-* **`D4TRACKER_DEBUG_UI=1`** 会打印真实布局数据（窗口尺寸、最小需求、分栏尺寸、各表
-  高度）并自动退出，布局出问题时先用它，比截图猜快得多。
-* **抓对话框截图要放宽 `list_windows` 的尺寸门槛。** 默认过滤掉小于 320x240 的窗口，
-  而 `QMessageBox` 只有 341x150，会被直接漏掉。
-
-### 打包踩过的坑
-
-* **可写数据不能跟着包走。** 单文件模式启动时把整个包解到 `sys._MEIPASS` 临时目录，
-  进程退出即删 —— 数据库放那里等于每次从零开始。所以 `templates/` 是只读资源（进包），
-  `counts.db` 走 `paths.data_dir()` 落到 exe 旁边。见 `d4tracker/paths.py`。
-* **`--add-data` 的相对路径是相对 specpath 解析的**，不是 cwd。一旦 `--specpath` 指向
-  `build/`，`templates` 就会被解析成 `build/templates` 而报 "Unable to find"。
-* **不要排除 `PySide6.QtNetwork` / `QtOpenGL` / `shiboken6.Shiboken`。** 第一版为了瘦身
-  排掉了，结果 GUI 一起来就崩（Qt 平台插件加载失败）。而 `--selftest` 根本不 import Qt，
-  所以自检全绿、完全测不出来 —— 这类问题只能靠**真的把窗口拉起来**才暴露。
-* **`--noconsole` 下 `sys.stdout` 是 `None`，`print()` 会抛异常。** 自检改成 TEE 同时写
-  `data/selftest.log`；另外 `run_tracker.py` 装了全局异常兜底，崩溃会落 `data/crash.log`
-  （否则游戏窗口一挡，错误框就没了，堆栈也就丢了）。
-* **单文件版需要往 `%TEMP%` 解压。** 如果杀软或组策略拦住临时目录，会弹一个只有
-  "Error" 的框 —— 这种时候用单文件夹版。
-* 单文件版是**两个进程**（引导 + 子进程），窗口属于子进程；写脚本检测它是否启动时，
-  盯父进程的 `MainWindowTitle` 永远是空的。
-
 ## 信号与判定（实测）
 
 各类活动的"完成"表现**不在同一处**，所以模板各自带 ROI（由样本实测得到，按参考
@@ -385,38 +337,6 @@ py -3.13 -m venv .venv
 
 **性能上限约 25 fps**（PrintWindow 每帧 40ms，这是硬成本）。所以检测不能靠高帧率
 轮询 —— 结算面板这类 UI 会停留数秒，2~3 fps 足够，靠"连续 N 帧稳定"去抖动。
-
-## 样本采集（当前阶段）
-
-判定的目标是"哪些 UI 意味着副本已完成"。这需要真实画面，所以先采样本：
-
-```powershell
-cd D:\deepseek\workspace\d4-tracker
-.venv\Scripts\python.exe -m d4tracker.sampler
-```
-
-默认热键（改 `config/hotkeys.json` 生效）：
-
-| 热键 | 标签 |
-|---|---|
-| `Ctrl+Alt+1` | 梦魇地下城-完成 |
-| `Ctrl+Alt+2` | 深坑-完成 |
-| `Ctrl+Alt+3` | 炼狱魔潮-完成 |
-| `Ctrl+Alt+4` | 库拉斯特地下城-完成 |
-| `Ctrl+Alt+5` | 黑暗堡垒-完成 |
-| `Ctrl+Alt+6` | 秘语之树-交付 |
-| `Ctrl+Alt+7` | 巢穴首领-击杀 |
-| `Ctrl+Alt+8` | 地狱狂潮-余烬面板 |
-| `Ctrl+Alt+9` | 反例-无事件 |
-| `Ctrl+Alt+0` | 随手抓一帧 |
-
-**不需要掐准时机**：按一下就会保留命中前 6 秒到后 4 秒的全部画面（环形缓冲）。
-看见结算面板、或者刚打完觉得"应该要算一次"的时候随手按即可。
-
-`Ctrl+Alt+9` 请多按几次：城镇、背包、赶路、战斗中 —— 这些是**反例**，
-用来压低误报，和正例同样重要。
-
-排错用控制台模式：`.venv\Scripts\python.exe -m d4tracker.sampler --headless`
 
 ## 识别不准怎么办
 
