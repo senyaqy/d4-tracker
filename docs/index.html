@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>暗黑4 副本计数器 — 自动统计你打了多少把</title>
+<meta name="description" content="玩《暗黑破坏神IV》时自动统计各类副本/活动完成次数。只读屏幕像素，不读内存、不注入、不模拟输入。">
+<style>
+  :root{
+    --bg:#0f0f15; --panel:#17171f; --panel2:#1c1c26; --line:#2c2c38;
+    --fg:#e6e6ee; --dim:#9a9aa8; --dim2:#6a6a78;
+    --accent:#d4575f; --gold:#f0c96a; --green:#4fc97a;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:"Microsoft YaHei UI","Microsoft YaHei","Segoe UI",system-ui,sans-serif;
+    line-height:1.7; font-size:16px;
+  }
+  a{color:var(--accent); text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1000px; margin:0 auto; padding:0 20px}
+  header{padding:64px 0 32px; text-align:center}
+  h1{font-size:2.4rem; margin:0 0 12px; letter-spacing:.5px}
+  .tag{color:var(--dim); font-size:1.1rem; margin:0 auto 28px; max-width:640px}
+  .badges{display:flex; gap:8px; justify-content:center; flex-wrap:wrap; margin-bottom:28px}
+  .badge{
+    background:var(--panel2); border:1px solid var(--line); border-radius:999px;
+    padding:4px 14px; font-size:.85rem; color:var(--dim);
+  }
+  .badge b{color:var(--gold); font-weight:600}
+  .cta{display:flex; gap:12px; justify-content:center; flex-wrap:wrap}
+  .btn{
+    display:inline-block; padding:12px 28px; border-radius:8px; font-weight:600;
+    border:1px solid var(--line); background:var(--panel2); color:var(--fg);
+  }
+  .btn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+  .btn:hover{text-decoration:none; filter:brightness(1.15)}
+  .shot{margin:48px 0 8px}
+  .shot img{width:100%; border-radius:12px; border:1px solid var(--line); display:block}
+  .cap{text-align:center; color:var(--dim2); font-size:.85rem; margin-top:10px}
+  section{padding:44px 0; border-top:1px solid var(--line)}
+  h2{font-size:1.5rem; margin:0 0 20px; color:var(--accent)}
+  h3{font-size:1.05rem; margin:24px 0 8px}
+  table{width:100%; border-collapse:collapse; font-size:.95rem}
+  th,td{text-align:left; padding:10px 12px; border-bottom:1px solid var(--line)}
+  th{color:var(--dim); font-weight:600}
+  td code{color:var(--gold)}
+  .grid{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:18px 20px}
+  .card h3{margin:0 0 8px; color:var(--fg)}
+  .card p{margin:0; color:var(--dim); font-size:.92rem}
+  pre{
+    background:#0b0b10; border:1px solid var(--line); border-radius:8px;
+    padding:16px 18px; overflow-x:auto; font-size:.88rem;
+    font-family:Consolas,"Cascadia Mono",monospace; color:#c9c9d6;
+  }
+  code{font-family:Consolas,"Cascadia Mono",monospace}
+  .note{
+    background:var(--panel); border-left:3px solid var(--accent);
+    border-radius:0 8px 8px 0; padding:14px 18px; color:var(--dim); font-size:.93rem;
+  }
+  .ok{color:var(--green)}
+  footer{padding:40px 0 64px; border-top:1px solid var(--line); color:var(--dim2); font-size:.88rem; text-align:center}
+</style>
+</head>
+<body>
+
+<header class="wrap">
+  <h1>暗黑4 副本计数器</h1>
+  <p class="tag">
+    玩《暗黑破坏神IV》时自动统计各类副本和活动打了多少次，不用手动记账。
+  </p>
+  <div class="badges">
+    <span class="badge">只读屏幕像素</span>
+    <span class="badge">不读内存 / 不注入</span>
+    <span class="badge">完全离线</span>
+    <span class="badge">CPU <b>1.3%</b></span>
+    <span class="badge">MIT</span>
+  </div>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/senyaqy/d4-tracker/releases">下载 EXE</a>
+    <a class="btn" href="https://github.com/senyaqy/d4-tracker">查看源码</a>
+  </div>
+
+  <div class="shot">
+    <img src="screenshot.png" alt="暗黑4 副本计数器界面">
+    <div class="cap">界面（示例数据）</div>
+  </div>
+</header>
+
+<section class="wrap">
+  <h2>能计什么</h2>
+  <table>
+    <tr><th>活动</th><th>怎么判断"打完了"</th><th>方式</th></tr>
+    <tr><td>梦魇地下城</td><td><code>梦魇地下城完成</code></td><td class="ok">自动</td></tr>
+    <tr><td>深坑</td><td><code>地下城完成</code></td><td class="ok">自动</td></tr>
+    <tr><td>炼狱魔潮</td><td><code>波次：10/10</code></td><td class="ok">自动</td></tr>
+    <tr><td>库拉斯特地下城</td><td><code>区域通关</code></td><td class="ok">自动</td></tr>
+    <tr><td>秘语之树</td><td><code>使用此宝匣获取你的奖励。</code></td><td class="ok">自动</td></tr>
+    <tr><td>巢穴首领</td><td>目标行从 <code>击败&lt;首领&gt;…</code> 变成 <code>打开&lt;首领&gt;的秘宝</code></td><td class="ok">自动</td></tr>
+    <tr><td>地狱狂潮</td><td>小地图左侧的畸变余烬 / 灾祸之心</td><td class="ok">读数</td></tr>
+    <tr><td>想记的任何东西</td><td>自己加条目，+1 / −1 / 直接填数字</td><td>手动</td></tr>
+  </table>
+</section>
+
+<section class="wrap">
+  <h2>为什么是"看屏幕"</h2>
+  <p>
+    D4 没有战斗日志、没有开放 API（暴雪论坛从 2023 年至今的请求帖没有任何回应）；
+    唯一的结构化数据源是 Overwolf GEP，但要引入整个 Overwolf 平台。
+  </p>
+  <p>
+    暴雪蓝贴点名 TurboHUD4（读内存）可<strong>永久封号</strong>，判据是是否
+    "modify / automate / interfere"。
+  </p>
+  <div class="note">
+    本工具<strong>只读屏幕像素</strong>做图像识别：不读取游戏内存、不注入 DLL、
+    不安装键盘钩子、不模拟输入，也不修改任何游戏文件。这也是同类别工具
+    （d4lf、Diablo4Companion）长期公开采用的做法。
+  </div>
+</section>
+
+<section class="wrap">
+  <h2>怎么用</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>1. 下载</h3>
+      <p>到 Releases 页拿 <code>D4Tracker.exe</code>，双击即可。无需安装 Node 或 Python。</p>
+    </div>
+    <div class="card">
+      <h3>2. 点「开始」</h3>
+      <p>窗口里能实时看到每类模板的匹配分数和横幅区域预览，识别不准时一眼看出问题。</p>
+    </div>
+    <div class="card">
+      <h3>3. 正常玩</h3>
+      <p>打完一把它会自己记账。数据存在本机 SQLite，不上传任何东西。</p>
+    </div>
+  </div>
+  <h3>显示设置要求</h3>
+  <p>
+    游戏请使用<strong>窗口化(全屏) / 无边框窗口</strong>，关闭 HDR，字体大小保持默认。
+    独占全屏下抓不到画面——这是 Windows 的限制，不是工具的问题。
+  </p>
+</section>
+
+<section class="wrap">
+  <h2>原理</h2>
+  <p>
+    <code>PrintWindow(PW_RENDERFULLCONTENT)</code> 让游戏窗口自己渲染一份到我们的 DC，
+    所以<strong>游戏被别的窗口挡住也能抓到</strong>（普通的 BitBlt 在这种场景只会返回一片
+    纯色）。拿到画面后对固定的 UI 区域做<strong>文字掩膜 + IoU 模板匹配</strong>；
+    地狱狂潮那两个数字笔画太细，跳过检测模型直接送识别模型，再用滑动窗口投票压噪声。
+  </p>
+  <p>
+    每一类的 ROI 和阈值都是用真实游戏截图标定出来的，不是猜的，并且有
+    <code>tools/validate.py</code>（分离度）和 <code>tools/replay.py</code>（状态机回放）
+    做回归验证。
+  </p>
+</section>
+
+<section class="wrap">
+  <h2>从源码运行</h2>
+<pre>py -3.13 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\run-counter.cmd          # 主界面
+.\run-sampler.cmd          # 样本采集器（想加新副本类型时用）</pre>
+  <p style="color:var(--dim);font-size:.92rem">
+    自检：<code>.venv\Scripts\python.exe -m d4tracker --selftest</code>（不需要游戏、不需要样本）
+  </p>
+</section>
+
+<footer class="wrap">
+  MIT License · <a href="https://github.com/senyaqy/d4-tracker">GitHub</a><br>
+  与暴雪娱乐无关联。暗黑破坏神是暴雪娱乐的商标。
+</footer>
+
+</body>
+</html>

@@ -659,7 +659,14 @@ def run_gui(monitor: Monitor, autostart: bool = False) -> int:
             summary = monitor.store.readings_summary(key)
             cur = snap["values"].get(key)
             if cur is None:
-                lab.setText("未读到（当前不在地狱狂潮？）")
+                # 实时读不到（不在狂潮里，或刚启动）时，至少把上一次的记录摆出来 ——
+                # 只写"未读到"会让人以为数据丢了
+                if summary["latest"] is not None:
+                    lab.setText(f"最近记录 {summary['latest']}      "
+                                f"今日峰值 {summary['max']}      "
+                                f"今日累计获得 {summary['gained']}      （当前未读到）")
+                else:
+                    lab.setText("无记录（当前不在地狱狂潮？）")
                 continue
             lab.setText(f"{cur}      今日峰值 {summary['max']}      "
                         f"今日累计获得 {summary['gained']}      "

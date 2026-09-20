@@ -1,15 +1,84 @@
-# d4-tracker
+# 暗黑4 副本计数器（d4-tracker）
 
-暗黑破坏神IV 副本/活动计数器。**只读屏幕像素**，不读内存、不注入 DLL、不装输入钩子。
+玩《暗黑破坏神IV》时，**自动统计你打了多少次各类副本和活动**，不用手动记账。
 
-## 为什么是"看屏幕"
+**只读屏幕像素**——不读游戏内存、不注入 DLL、不装键盘钩子、不模拟输入。
+
+![界面](docs/screenshot.png)
+
+## 能计什么
+
+| 活动 | 怎么判断"打完了" | 自动 |
+|---|---|---|
+| 梦魇地下城 | 顶部居中横幅 `梦魇地下城完成` | ✅ |
+| 深坑 | 顶部居中横幅 `地下城完成` | ✅ |
+| 炼狱魔潮 | 波次计数器 `波次：10/10` | ✅ |
+| 库拉斯特地下城 | 右侧目标面板 `区域通关` | ✅ |
+| 秘语之树 | 中央奖励面板 `使用此宝匣获取你的奖励。` | ✅ |
+| 巢穴首领 | 目标行从 `击败<首领>…` 变成 `打开<首领>的秘宝` | ✅ |
+| 地狱狂潮 | 小地图左侧的**畸变余烬 / 灾祸之心**数值 | ✅ 读数 |
+| 想记的任何东西 | 自己加条目，`+1` / `−1` / 直接填数字 | 手动 |
+
+## 快速开始
+
+1. 到 [Releases](https://github.com/senyaqy/d4-tracker/releases) 下载 `D4Tracker.exe`
+   （或从源码跑，见下）
+2. 双击运行，点「开始」
+3. 进游戏正常玩 —— 打完一把它会自己记账
+
+窗口里能实时看到每类模板的**当前匹配分数**和**横幅区域预览**，所以万一识别不准，
+你一眼就能看出是哪块区域的问题。
+
+> **参数**：游戏用**窗口化(全屏) / 无边框窗口**，关闭 HDR，字体大小保持默认。
+> 独占全屏下抓不到画面（这是 Windows 的限制，不是工具的问题）。
+
+## 它是怎么工作的
 
 D4 没有战斗日志、没有开放 API（暴雪论坛从 2023 年至今的请求帖没有任何回应）；
-唯一的结构化数据源是 Overwolf GEP，但需要引入 Overwolf 平台。
+唯一的结构化数据源是 Overwolf GEP，但要引入整个 Overwolf 平台。
 
 暴雪蓝贴点名 TurboHUD4（读内存）可**永久封号**，判据是是否 "modify / automate /
 interfere"。屏幕捕获 + 图像识别不碰进程、不注入、不模拟输入，是同类工具
 （d4lf、Diablo4Companion）长期公开使用且未被处理的做法。
+
+技术上：`PrintWindow(PW_RENDERFULLCONTENT)` 让窗口自己渲染一份到我们的 DC（**游戏被
+别的窗口挡住也能抓到**），再对固定的 UI 区域做**文字掩膜 + IoU 模板匹配**；地狱狂潮那
+两个数字则跳过检测模型直接送识别，并用滑动窗口投票压噪声。
+
+## 实测数据
+
+跑在 2560×1440、i7 + 16 核的机器上：
+
+| 状态 | CPU | 内存 |
+|---|---|---|
+| 游戏在前台、3fps 持续抓帧 | **20.6% 单核**（总算力 1.3%） | 259 MB |
+| 游戏不在前台（自动跳过抓帧） | **2.3% 单核** | 213 MB |
+
+**完全离线可用**：代码里没有任何网络调用，运行时不产生任何 TCP 连接，
+OCR 模型和模板都打进 exe 里了。
+
+## 从源码运行
+
+```powershell
+py -3.13 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+.\run-counter.cmd          # 主界面
+.\run-sampler.cmd          # 样本采集器（想加新副本类型时用）
+```
+
+打包成 exe：
+
+```powershell
+.venv\Scripts\python.exe tools\make_icon.py
+.venv\Scripts\python.exe tools\build_exe.py              # 单文件夹版
+.venv\Scripts\python.exe tools\build_exe.py --onefile    # 单文件版
+```
+
+自检（不需要游戏、不需要样本）：
+
+```powershell
+.venv\Scripts\python.exe -m d4tracker --selftest
+```
 
 ## 目录
 
@@ -47,27 +116,17 @@ tools/
   build_exe.py  PyInstaller 打包
 ```
 
-## 用 exe 运行（推荐）
+## 打包产物
 
-已经打包好，双击桌面快捷方式「暗黑4 副本计数器」即可。两种产物装在同一个目录、
-**共用同一份 `data/counts.db`**（否则两种版本各记各的，计数会分裂）：
+两种产物可以装在同一个目录、**共用同一份 `data/counts.db`**（否则各记各的，计数会分裂）：
 
 | 产物 | 体积 | 启动 | 用途 |
 |---|---|---|---|
-| `dist\D4Tracker\D4Tracker.exe` | 5.3 MB + 支撑目录 | 约 1 秒 | 日常用（推荐） |
-| `dist\D4Tracker\D4Tracker-portable.exe` | 130.7 MB 单文件 | 约 3 秒 | 拷到别的机器 |
+| `D4Tracker.exe` + 支撑目录 | 5.3 MB + 314 MB | 约 1 秒 | 日常用（推荐） |
+| `D4Tracker-portable.exe` | 130.7 MB 单文件 | 约 3 秒 | 拷到别的机器 |
 
-窗口里能实时看到：每类模板的当前分数（超阈值标 `***`）、横幅区域预览、今日/总计计数、
-最近事件、地狱狂潮的余烬/灾祸之心。
-
-自己重新打包：
-
-```powershell
-.venv\Scripts\python.exe tools\make_icon.py                 # 生成图标（可选）
-.venv\Scripts\python.exe tools\build_exe.py                 # 单文件夹版
-.venv\Scripts\python.exe tools\build_exe.py --onefile       # 单文件版
-.venv\Scripts\python.exe tools\build_exe.py --console ...   # 保留控制台，排查启动错误
-```
+EXE 在 [Releases](https://github.com/senyaqy/d4-tracker/releases) 页面下载。
+打包命令见上面的「从源码运行」。
 
 ### 界面
 
@@ -128,26 +187,6 @@ tools/
   "Error" 的框 —— 这种时候用单文件夹版。
 * 单文件版是**两个进程**（引导 + 子进程），窗口属于子进程；写脚本检测它是否启动时，
   盯父进程的 `MainWindowTitle` 永远是空的。
-
-## 跑起来（源码）
-
-```powershell
-# 计数器（主界面）
-.\run-counter.cmd
-# 或
-.venv\Scripts\python.exe -m d4tracker
-
-# 采集样本
-.\run-sampler.cmd
-```
-
-自检（不需要游戏、不需要样本）：
-
-```powershell
-.venv\Scripts\python.exe -m d4tracker --selftest     # 模板 / 存储 / 数值通路
-.venv\Scripts\python.exe tools\validate.py           # 全样本分离度与阈值（需样本）
-.venv\Scripts\python.exe tools\replay.py             # 状态机回放（需样本）
-```
 
 ## 信号与判定（实测）
 
