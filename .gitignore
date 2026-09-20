@@ -22,3 +22,6 @@ __pycache__/
 .idea/
 Thumbs.db
 desktop.ini
+
+# ---- 内部工作笔记（开发过程记录，不随仓库发布）----
+NOTES.local.md
