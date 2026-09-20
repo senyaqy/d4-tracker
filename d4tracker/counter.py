@@ -43,6 +43,7 @@ class _State:
     last_score: float = 0.0
     fired_frames: int = 0
     suppressed: int = 0         # 因冷却被压掉的次数（诊断用）
+    run_best: float = 0.0       # 本段连续命中的最高分（诊断用）
 
 
 class EventCounter:
@@ -54,6 +55,10 @@ class EventCounter:
         self.cooldown = cooldown
         self.states: dict[str, _State] = {}
         self.events: list[Event] = []
+        # 命中过阈值、但连续帧数没凑够 confirm_frames 的"短信号"。
+        # 这是"我明明看到提示了却没给我算"的头号嫌疑：3fps 下 2 帧 = 0.67 秒，
+        # 一闪而过的提示就够不上。不记下来的话，事后完全无从判断。
+        self.short_runs: list[tuple[str, float, int, float]] = []
 
     def _state(self, kind: str) -> _State:
         if kind not in self.states:
@@ -72,6 +77,7 @@ class EventCounter:
             if score >= self.threshold:
                 st.pending += 1
                 st.last_hit = now
+                st.run_best = max(st.run_best, score)
 
                 ready_to_fire = (not st.active) and st.pending >= self.confirm_frames
                 if ready_to_fire:
@@ -88,7 +94,11 @@ class EventCounter:
                     # 无论是否被冷却压掉，都进入 active，避免同一横幅反复尝试触发
                     st.active = True
             else:
+                # 这一段命中结束了。没凑够帧、也没进过 active，就是"短信号"。
+                if 0 < st.pending < self.confirm_frames and not st.active:
+                    self.short_runs.append((kind, st.run_best, st.pending, now))
                 st.pending = 0
+                st.run_best = 0.0
                 if st.active and (now - st.last_hit) >= self.release_gap:
                     st.active = False
 
@@ -96,6 +106,11 @@ class EventCounter:
 
     def active_kinds(self) -> list[str]:
         return [k for k, s in self.states.items() if s.active]
+
+    def drain_short_runs(self) -> list[tuple[str, float, int, float]]:
+        out = self.short_runs
+        self.short_runs = []
+        return out
 
     def report(self) -> str:
         lines = []

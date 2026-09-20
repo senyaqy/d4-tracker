@@ -29,6 +29,10 @@ from .counter import Event, EventCounter
 from .store import Store
 from .values import ValueReader
 
+# 分数落在这个区间算「像但不够」：不是识别成功，但值得留一份现场。
+# 定 0.30 是因为实测各模板的反例最高分在 0.16~0.37，从这里往上就有诊断价值了。
+NEARMISS_WATCH = 0.30
+
 ROOT = paths.app_root()
 DB_PATH = paths.db_path()
 
@@ -61,6 +65,11 @@ class Monitor:
         self.value_changes: list[tuple[str, int, float]] = []
         self._last_recorded: dict[str, int] = {}
 
+        # 「接近但没到阈值」的留证。没有这个，事后只能靠猜是漏检还是压根没出现 ——
+        # 秘语之树出过一次零识别，当时没有任何现场可查，只能重开一局复现。
+        self.nearmiss_best: dict[str, float] = {}
+        self.nearmiss_pending: list[tuple[str, str, float, str, str]] = []
+
         self.frames_seen = 0
         self.frames_skipped = 0
         self.last_capture_ms = 0.0
@@ -78,9 +87,12 @@ class Monitor:
     def process_frame(self, img: np.ndarray, now: float | None = None) -> list[Event]:
         """一帧走完全链路。回放和实时都走这里，保证两条路行为一致。"""
         now = time.time() if now is None else now
-        scores = {t: s for t, _l, s in self.detector.classify(img)}
+        results = self.detector.classify(img)
+        scores = {t: s for t, _l, s in results}
 
         fired = self.counter.update(scores, now=now)
+        self._check_nearmiss(results, img)
+        self._check_short_runs(img)
 
         # 预览显示"当前得分最高的那个模板"的 ROI —— 出问题时一眼能看出是哪块区域
         best = max(scores.items(), key=lambda kv: kv[1])[0] if scores else None
@@ -100,6 +112,80 @@ class Monitor:
             out = self.new_events
             self.new_events = []
         return out
+
+    def drain_nearmiss(self) -> list[tuple[str, str, float, str, str]]:
+        with self.lock:
+            out = self.nearmiss_pending
+            self.nearmiss_pending = []
+        return out
+
+    def _save_crop(self, img: np.ndarray, name: str, score: float, tag: str) -> str:
+        """把检测器**实际看到的那块 ROI** 存下来，返回路径（失败返回空串）。
+
+        存图是关键：事后看分数只能猜，看图能直接判断是位置偏了、字变了，
+        还是提示框压根没出现。
+        """
+        try:
+            roi = self.detector.preview(img, name)
+            if roi is None or not roi.size:
+                return ""
+            out_dir = os.path.join(paths.data_dir(), "nearmiss")
+            os.makedirs(out_dir, exist_ok=True)
+            stamp = time.strftime("%m%d-%H%M%S")
+            path = os.path.join(out_dir, f"{stamp}_{name}_{tag}_{score:.3f}.png")
+            if not imageio.imwrite(path, roi):
+                return ""
+            self._trim_nearmiss(out_dir)
+            return path
+        except Exception:                                # noqa: BLE001
+            return ""
+
+    def _check_nearmiss(self, results: list[tuple[str, str, float]],
+                        img: np.ndarray) -> None:
+        """分数进了「像但不够」的区间就留一份现场。
+
+        只在刷新了该模板历史最高分（且超过 0.03）时才存，避免同一次事件刷满磁盘。
+        复用 process_frame 已经算好的结果，不重复 classify。
+        """
+        for name, label, iou in results:
+            if iou < NEARMISS_WATCH or iou >= detect.MATCH_THRESHOLD:
+                continue
+            if iou <= self.nearmiss_best.get(name, 0.0) + 0.03:
+                continue
+
+            self.nearmiss_best[name] = iou
+            path = self._save_crop(img, name, iou, "near")
+            with self.lock:
+                self.nearmiss_pending.append(
+                    (name, label, iou, path,
+                     f"最高 {iou:.3f}，未到阈值 {detect.MATCH_THRESHOLD}"))
+
+    def _check_short_runs(self, img: np.ndarray) -> None:
+        """命中过阈值、但连续帧数不够 -> 也留证。
+
+        这类是"我明明看到提示了却没算上"的头号嫌疑：3fps 下 confirm_frames=2
+        意味着提示得连续显示 0.67 秒。分数明明过了阈值说明模板是对的，
+        问题在时长——看图就能确认。
+        """
+        for kind, best, frames, _ts in self.counter.drain_short_runs():
+            path = self._save_crop(img, kind, best, "short")
+            need = self.counter.confirm_frames
+            with self.lock:
+                self.nearmiss_pending.append(
+                    (kind, kinds.label_of(kind), best, path,
+                     f"命中但只持续 {frames} 帧（需连续 {need} 帧），已忽略"))
+
+    @staticmethod
+    def _trim_nearmiss(out_dir: str, keep: int = 60) -> None:
+        """只留最近 keep 张，否则玩一晚上能堆出几百兆。"""
+        try:
+            files = sorted(
+                (os.path.join(out_dir, f) for f in os.listdir(out_dir) if f.endswith(".png")),
+                key=os.path.getmtime)
+            for old in files[:-keep]:
+                os.remove(old)
+        except OSError:
+            pass
 
     def read_values(self, img: np.ndarray) -> dict[str, int]:
         """读数值型指标（余烬/灾祸之心），只在变化时落库。
@@ -134,6 +220,7 @@ class Monitor:
                 "active": self.counter.active_kinds(),
                 "values": dict(self.latest_values),
                 "value_confidence": dict(self.value_confidence),
+                "nearmiss": dict(self.nearmiss_best),
                 "errors": list(self.errors[-3:]),
             }
 
@@ -633,8 +720,12 @@ def run_gui(monitor: Monitor, autostart: bool = False) -> int:
 
         for kind, (lab, label) in score_labels.items():
             score = snap["scores"].get(kind, 0.0)
+            best = snap.get("nearmiss", {}).get(kind, 0.0)
             mark = "***" if score >= detect.MATCH_THRESHOLD else "   "
-            lab.setText(f"{mark} {label}  {score:.3f}")
+            # 没到阈值时把「历史最高」也摆出来：0.000 和「最高 0.48」是完全不同的信息，
+            # 前者是没出现，后者是位置/文字对不上
+            hint = f"   最高 {best:.3f}" if (best > 0 and score < detect.MATCH_THRESHOLD) else ""
+            lab.setText(f"{mark} {label}  {score:.3f}{hint}")
 
         today = monitor.store.counts_by_kind()
         total = monitor.store.counts_by_kind("all")
@@ -681,6 +772,11 @@ def run_gui(monitor: Monitor, autostart: bool = False) -> int:
 
         errs = snap["errors"]
         lbl_warn.setText(("最近错误：" + " / ".join(errs)) if errs else "")
+
+        # 接近阈值 / 命中但帧数不足：都写进日志并留图，这是事后唯一能查的现场
+        for name, label, score, path, why in monitor.drain_nearmiss():
+            where = f"，图 {os.path.relpath(path, paths.data_dir())}" if path else ""
+            log_line(f"{label}：{why}{where}", "warn")
 
     # ---- 双击「今日」格直接填数字 ----
     def on_double(table, row: int, col: int) -> None:
