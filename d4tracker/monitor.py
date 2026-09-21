@@ -39,6 +39,10 @@ NEARMISS_WATCH = 0.30
 # 0.40 落在实测的干净间隔里：反例最高 0.37，正例最低 0.63。
 RELEASE_THRESHOLD = 0.40
 
+# 悬浮窗默认从屏幕捕获里排除，避免它压住识别区域时干扰模板匹配。
+# 代价是 OBS / 截图里也看不到它 —— 想边播边显示计数就设这个环境变量。
+OVERLAY_CAPTURABLE = bool(os.environ.get("D4TRACKER_OVERLAY_CAPTURABLE"))
+
 ROOT = paths.app_root()
 DB_PATH = paths.db_path()
 
@@ -437,8 +441,155 @@ def _num_item(value: int):
 # ---------------------------------------------------------------- 界面
 
 
+def _to_bool(value) -> bool:
+    """QSettings 读回来的布尔在不同后端下可能是 bool / int / str，统一一下。"""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def exclude_from_capture(widget) -> bool:
+    """把窗口从屏幕捕获里排除掉（Win10 2004+）。
+
+    悬浮窗盖在游戏上时，抓帧的 BitBlt 路径取的是**屏幕合成结果**，会把悬浮窗一起
+    拍进去 —— 万一它正好压在某块模板 ROI 上，识别就被自己干扰了。
+    PrintWindow 路径不受影响（只渲染目标窗口自己的内容），但两条路都得安全。
+
+    副作用：被排除的窗口在 OBS / 截图里也看不见。要边直播边显示计数的话，
+    设环境变量 ``D4TRACKER_OVERLAY_CAPTURABLE=1`` 关掉这个排除。
+    """
+    if OVERLAY_CAPTURABLE:
+        return False
+    try:
+        import ctypes
+
+        WDA_EXCLUDEFROMCAPTURE = 0x00000011
+        return bool(ctypes.windll.user32.SetWindowDisplayAffinity(
+            int(widget.winId()), WDA_EXCLUDEFROMCAPTURE))
+    except Exception:                                    # noqa: BLE001
+        return False
+
+
 def run_gui(monitor: Monitor, autostart: bool = False) -> int:
     from PySide6 import QtCore, QtGui, QtWidgets
+
+    class Overlay(QtWidgets.QWidget):
+        """半透明悬浮窗：只显示项目名和对应次数。
+
+        三个容易做错的点：
+
+        * **半透明要"画"出来，不能用 setWindowOpacity。** 整体降透明度会把文字一起
+          淡化，贴在游戏画面上根本读不清。这里背景用带 alpha 的圆角矩形，文字保持不透明。
+        * **不能抢焦点。** ``WA_ShowWithoutActivating`` + ``Qt.Tool``，否则一显示就把
+          游戏切到后台，反而害得抓帧跳过（only_when_foreground）。
+        * **必须从捕获里排除**，见 ``exclude_from_capture``。
+        """
+
+        moved = QtCore.Signal()
+
+        def __init__(self, parent=None) -> None:
+            super().__init__(
+                parent,
+                QtCore.Qt.FramelessWindowHint
+                | QtCore.Qt.WindowStaysOnTopHint
+                | QtCore.Qt.Tool)
+            self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+            self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating)
+            self.setWindowTitle("D4 计数悬浮窗")
+            self.rows: list[tuple[str, int, int]] = []
+            self.excluded = False
+            self._drag = None
+            f = self.font()
+            f.setPointSizeF(10.5)
+            self.setFont(f)
+            self._relayout()
+
+        # ---------------------------------------------------------------- 内容
+        def set_rows(self, rows: list[tuple[str, int, int]]) -> None:
+            """rows = [(标签, 今日, 总计)]"""
+            if rows == self.rows:
+                return
+            self.rows = rows
+            self._relayout()
+            self.update()
+
+        def _relayout(self) -> None:
+            fm = QtGui.QFontMetrics(self.font())
+            widest = max((fm.horizontalAdvance(r[0]) for r in self.rows), default=90)
+            width = max(196, widest + 92)
+            line = fm.height() + 5
+            self.setFixedSize(width, 16 + 20 + line * max(1, len(self.rows)) + 10)
+
+        # ---------------------------------------------------------------- 绘制
+        def paintEvent(self, _ev) -> None:
+            p = QtGui.QPainter(self)
+            p.setRenderHint(QtGui.QPainter.Antialiasing)
+
+            body = self.rect().adjusted(0, 0, -1, -1)
+            p.setBrush(QtGui.QColor(14, 14, 20, 188))         # 半透明底：能看见游戏画面
+            p.setPen(QtGui.QPen(QtGui.QColor(212, 87, 95, 170), 1))
+            p.drawRoundedRect(body, 9, 9)
+
+            fm = QtGui.QFontMetrics(self.font())
+            line = fm.height() + 5
+            pad = 11
+            y = 12
+
+            # 表头：位置必须和下面的数值对齐（总计在左、今日在右），否则读起来对不上
+            p.setFont(self.font())
+            p.setPen(QtGui.QColor(150, 150, 168, 220))
+            p.drawText(QtCore.QRect(pad, y, self.width() - 2 * pad, fm.height()),
+                       QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, "总计")
+            p.drawText(QtCore.QRect(pad, y, self.width() - 2 * pad, fm.height()),
+                       QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, "今日")
+            y += 20
+
+            bold = self.font()
+            bold.setBold(True)
+            for label, today, total in self.rows:
+                box = QtCore.QRect(pad, y, self.width() - 2 * pad, fm.height())
+                p.setFont(self.font())
+                p.setPen(QtGui.QColor(226, 226, 238, 235))
+                p.drawText(box, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, label)
+
+                p.setFont(bold)
+                p.setPen(QtGui.QColor(240, 201, 106, 255))     # 今日：金色高亮
+                p.drawText(box, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, str(today))
+                if total != today:
+                    tw = fm.horizontalAdvance(str(today))
+                    p.setFont(self.font())
+                    p.setPen(QtGui.QColor(150, 150, 168, 200))
+                    sub = QtCore.QRect(pad, y, self.width() - 2 * pad - tw - 8, fm.height())
+                    p.drawText(sub, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, str(total))
+                y += line
+
+        # ---------------------------------------------------------------- 交互
+        def showEvent(self, ev) -> None:
+            super().showEvent(ev)
+            # 每次显示都设一遍：winId 可能变化，而且这句可能因系统版本失败
+            self.excluded = exclude_from_capture(self)
+
+        def mousePressEvent(self, ev) -> None:
+            if ev.button() == QtCore.Qt.LeftButton:
+                self._drag = ev.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                ev.accept()
+
+        def mouseMoveEvent(self, ev) -> None:
+            if self._drag is not None and (ev.buttons() & QtCore.Qt.LeftButton):
+                self.move(ev.globalPosition().toPoint() - self._drag)
+                ev.accept()
+
+        def mouseReleaseEvent(self, ev) -> None:
+            if self._drag is not None:
+                self._drag = None
+                self.moved.emit()
+                ev.accept()
+
+        def contextMenuEvent(self, ev) -> None:
+            menu = QtWidgets.QMenu(self)
+            menu.addAction("隐藏悬浮窗", self.hide)
+            menu.exec(ev.globalPos())
+
 
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName(paths.APP_NAME)
@@ -455,6 +606,10 @@ def run_gui(monitor: Monitor, autostart: bool = False) -> int:
     # （存注册表的版本出过一次事：布局改版后窗口尺寸被旧值钉死，用户还没法自己清。）
     settings = QtCore.QSettings(os.path.join(paths.data_dir(), "ui.ini"),
                                 QtCore.QSettings.IniFormat)
+
+    # 悬浮窗：主窗口最小化时显示在场面上
+    overlay = Overlay()
+    ui_state = {"overlay": _to_bool(settings.value("overlay/enabled", False))}
 
     win = QtWidgets.QWidget()
     win.setObjectName("root")
@@ -490,6 +645,8 @@ def run_gui(monitor: Monitor, autostart: bool = False) -> int:
     btn_undo = tool_button("撤销上一次", "删掉最新的一条自动记录")
     btn_open = tool_button("数据目录", "打开存放 counts.db 的目录")
     btn_about = tool_button("关于", "工作方式与合规说明")
+    btn_overlay = tool_button("悬浮窗", "最小化后显示半透明计数悬浮窗（可拖动，右键隐藏）")
+    btn_overlay.setCheckable(True)
     root.addLayout(head)
 
     # ============================ 中部：可拖拽的三段 ============================
@@ -785,6 +942,36 @@ def run_gui(monitor: Monitor, autostart: bool = False) -> int:
             where = f"，图 {os.path.relpath(path, paths.data_dir())}" if path else ""
             log_line(f"{label}：{why}{where}", "warn")
 
+        _sync_overlay()
+
+    def _sync_overlay() -> None:
+        """悬浮窗的内容 + 「主窗口最小化才显示」的联动。"""
+        if not ui_state["overlay"]:
+            if overlay.isVisible():
+                overlay.hide()
+            return
+
+        today = monitor.store.counts_by_kind()
+        total = monitor.store.counts_by_kind("all")
+        rows = [(label, today.get(kind, 0), total.get(kind, 0))
+                for kind, label, _ready, _note in kinds.TARGETS]
+        ctoday = monitor.store.custom_counts()
+        ctotal = monitor.store.custom_counts("all")
+        for name in monitor.store.custom_items():
+            rows.append((name, ctoday.get(name, 0), ctotal.get(name, 0)))
+        overlay.set_rows(rows)
+
+        minimized = bool(win.windowState() & QtCore.Qt.WindowMinimized)
+        if minimized and not overlay.isVisible():
+            overlay.show()
+            if overlay.excluded:
+                log_line("已最小化，悬浮窗显示中（可拖动，右键隐藏）", "ok")
+            else:
+                log_line("已最小化，悬浮窗显示中；但未能从屏幕捕获中排除 —— "
+                         "别把它拖到识别区域上", "warn")
+        elif not minimized and overlay.isVisible():
+            overlay.hide()
+
     # ---- 双击「今日」格直接填数字 ----
     def on_double(table, row: int, col: int) -> None:
         if col != 1 or not table.item(row, 0):
@@ -896,6 +1083,25 @@ def run_gui(monitor: Monitor, autostart: bool = False) -> int:
         lambda: (monitor.store.reset_readings(),
                  log_line("已清空数值累计", "ok"), refresh()))
     btn_about.clicked.connect(lambda: _show_about())
+
+    # ---- 悬浮窗 ----
+    saved_pos = settings.value("overlay/pos")
+    if saved_pos is not None:
+        overlay.move(saved_pos)
+    else:
+        g = app.primaryScreen().availableGeometry()
+        overlay.move(g.left() + 24, g.top() + 24)     # 默认左上角：模板 ROI 都在中右
+    overlay.moved.connect(lambda: settings.setValue("overlay/pos", overlay.pos()))
+    btn_overlay.setChecked(ui_state["overlay"])
+
+    def toggle_overlay(checked: bool) -> None:
+        ui_state["overlay"] = checked
+        settings.setValue("overlay/enabled", checked)
+        log_line("悬浮窗已开启：最小化主窗口后显示在场面上" if checked
+                 else "悬浮窗已关闭", "ok")
+        _sync_overlay()
+
+    btn_overlay.toggled.connect(toggle_overlay)
 
     def _show_about() -> None:
         box = QtWidgets.QMessageBox(win)
