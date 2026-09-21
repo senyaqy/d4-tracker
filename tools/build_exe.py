@@ -69,6 +69,25 @@ def main(argv: list[str] | None = None) -> int:
             subprocess.call(["taskkill", "/IM", image, "/F"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    # **必须先把非构建产物搬走。**
+    # `--clean` 会把整个 dist/<name>/ 删掉重建，而里面不止 PyInstaller 的产物：
+    # 用户数据（counts.db）、以及手动放进来的另一个版本 exe。不搬的话每打包一次
+    # 就清空一次 —— 真丢过一次数据库，也丢过一次单文件版。
+    # 规则：PyInstaller 只会生成 <name>.exe 和 _internal/，其余全部保留。
+    target_dir = os.path.join(DIST, args.name)
+    saved = os.path.join(DIST, f"_saved-{args.name}")
+    preserve: list[str] = []
+    if os.path.isdir(target_dir) and not args.onefile:
+        skip = {f"{args.name}.exe", "_internal"}
+        keep = sorted(n for n in os.listdir(target_dir) if n not in skip)
+        if keep:
+            shutil.rmtree(saved, ignore_errors=True)
+            os.makedirs(saved, exist_ok=True)
+            for name in keep:
+                shutil.move(os.path.join(target_dir, name), os.path.join(saved, name))
+                preserve.append(name)
+            print(f"已暂存 {len(keep)} 项非构建产物 -> {saved}")
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean",
@@ -113,6 +132,19 @@ def main(argv: list[str] | None = None) -> int:
     rc = subprocess.call(cmd, cwd=ROOT)
     dt = time.perf_counter() - t0
     print(f"\nPyInstaller 退出码 {rc}，耗时 {dt:.0f}s")
+
+    # 无论成功失败，都把暂存的东西放回去
+    if preserve:
+        os.makedirs(target_dir, exist_ok=True)
+        for name in preserve:
+            dst = os.path.join(target_dir, name)
+            if os.path.isdir(dst):
+                shutil.rmtree(dst, ignore_errors=True)
+            elif os.path.exists(dst):
+                os.remove(dst)
+            shutil.move(os.path.join(saved, name), dst)
+        shutil.rmtree(saved, ignore_errors=True)
+        print(f"已恢复 {len(preserve)} 项 -> {target_dir}：{', '.join(preserve)}")
 
     if rc != 0:
         return rc
