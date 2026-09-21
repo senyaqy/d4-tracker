@@ -44,12 +44,17 @@ class _State:
     fired_frames: int = 0
     suppressed: int = 0         # 因冷却被压掉的次数（诊断用）
     run_best: float = 0.0       # 本段连续命中的最高分（诊断用）
+    low_since: float = 0.0      # 分数开始"持续低于释放阈值"的时刻（迟滞用）
+    refires: int = 0            # 同一段文案被重复触发的次数（诊断用）
 
 
 class EventCounter:
     def __init__(self, threshold: float, confirm_frames: int = 2,
-                 release_gap: float = 1.0, cooldown: float = 20.0) -> None:
+                 release_gap: float = 1.0, cooldown: float = 20.0,
+                 release_threshold: float | None = None) -> None:
         self.threshold = threshold
+        # 释放阈值默认等于触发阈值（旧行为）；给一个更低的就变成迟滞。
+        self.release_threshold = threshold if release_threshold is None else release_threshold
         self.confirm_frames = confirm_frames
         self.release_gap = release_gap
         self.cooldown = cooldown
@@ -92,6 +97,8 @@ class EventCounter:
                         self.events.append(ev)
                         fired.append(ev)
                     # 无论是否被冷却压掉，都进入 active，避免同一横幅反复尝试触发
+                    if st.active:
+                        st.refires += 1
                     st.active = True
             else:
                 # 这一段命中结束了。没凑够帧、也没进过 active，就是"短信号"。
@@ -99,8 +106,24 @@ class EventCounter:
                     self.short_runs.append((kind, st.run_best, st.pending, now))
                 st.pending = 0
                 st.run_best = 0.0
-                if st.active and (now - st.last_hit) >= self.release_gap:
+
+            # 释放判定与触发判定用**两个不同的阈值**（迟滞 / Schmitt trigger）。
+            #
+            # 原先是"低于触发阈值满 release_gap 秒就释放"。问题在于：如果一段文案
+            # 常驻屏幕（比如巢穴首领那条一直显示的目标行），分数会在 0.55 上下抖动，
+            # 于是反复"释放 → 再触发"，同一段文案被记成很多次 —— 实战数据里
+            # 90 秒记了 3 次巢穴首领、分数全是 0.766/0.767/0.767，就是这个症状。
+            #
+            # 改成：只有分数掉到 release_threshold（实测反例最高 0.37、正例最低 0.63，
+            # 取 0.40 落在干净的间隔里）以下并持续 release_gap 秒，才算横幅真的消失。
+            # 只比阈值高一点点的抖动不算。
+            if score < self.release_threshold:
+                if st.low_since == 0.0:
+                    st.low_since = now
+                elif st.active and (now - st.low_since) >= self.release_gap:
                     st.active = False
+            else:
+                st.low_since = 0.0
 
         return fired
 

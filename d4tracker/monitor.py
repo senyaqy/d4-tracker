@@ -33,6 +33,12 @@ from .values import ValueReader
 # 定 0.30 是因为实测各模板的反例最高分在 0.16~0.37，从这里往上就有诊断价值了。
 NEARMISS_WATCH = 0.30
 
+# 迟滞用的释放阈值：低于它才认为"横幅消失了"。
+# 不直接用 MATCH_THRESHOLD(0.55) 是因为分数在阈值附近抖动时，会反复
+# "释放 -> 再触发"，把一段常驻文案记成很多次（实战里 90 秒记了 3 次巢穴首领）。
+# 0.40 落在实测的干净间隔里：反例最高 0.37，正例最低 0.63。
+RELEASE_THRESHOLD = 0.40
+
 ROOT = paths.app_root()
 DB_PATH = paths.db_path()
 
@@ -46,7 +52,8 @@ class Monitor:
         self.store = store
         self.detector = detector
         self.counter = EventCounter(threshold=detect.MATCH_THRESHOLD,
-                                    confirm_frames=detect.CONFIRM_FRAMES)
+                                    confirm_frames=detect.CONFIRM_FRAMES,
+                                    release_threshold=RELEASE_THRESHOLD)
         self.fps = fps
         self.only_when_foreground = only_when_foreground
 
@@ -1206,6 +1213,10 @@ def _run_selftest(samples_root: str) -> int:
             print(f"  !! 数值读取抛异常: {type(exc).__name__}: {exc}")
             ok = False
 
+    # ---- 状态机：迟滞（这是"同一段文案被记很多次"的根因，必须回归）----
+    print("\n-- 状态机：迟滞与重复触发 --")
+    ok = _check_counter(ok)
+
     store.close()
     if os.path.exists(tmp):
         os.remove(tmp)
@@ -1213,6 +1224,55 @@ def _run_selftest(samples_root: str) -> int:
         ok = ok and total == 1
     print("全链路自检: " + ("通过" if ok else "失败"))
     return 0 if ok else 1
+
+
+def _check_counter(ok: bool) -> bool:
+    """状态机的关键行为，不需要游戏也不需要样本。
+
+    实战里出现过 90 秒记 3 次巢穴首领（分数几乎相同），根因就是释放判定也用触发
+    阈值：文案常驻时分数一抖就"释放→再触发"。这里把迟滞的行为钉死。
+    """
+    def run(scores, release_threshold):
+        c = EventCounter(threshold=detect.MATCH_THRESHOLD,
+                         confirm_frames=detect.CONFIRM_FRAMES,
+                         release_threshold=release_threshold)
+        fired, t = [], 1000.0
+        for s in scores:
+            fired += c.update({"k": s}, now=t)
+            t += 1.0 / 3.0
+        return fired
+
+    th = detect.MATCH_THRESHOLD
+
+    # 常驻文案 + 周期性短暂掉到 RELEASE_THRESHOLD 之上：只该记 1 次
+    flicker = ([0.8] * 6 + [RELEASE_THRESHOLD + 0.05] * 18) * 12
+    n_new = len(run(flicker, RELEASE_THRESHOLD))
+    n_old = len(run(flicker, th))
+    print(f"  文案抖动 96 秒: 迟滞={n_new} 次   旧逻辑={n_old} 次（应为 {n_new} < {n_old}）")
+    if n_new != 1 or n_old <= 1:
+        print("  !! 迟滞没起作用")
+        ok = False
+
+    # 真的消失足够久再来 -> 必须还能记第二次
+    gone = [0.8] * 6 + [0.1] * 75 + [0.8] * 6
+    n2 = len(run(gone, RELEASE_THRESHOLD))
+    print(f"  真消失 25 秒后再来: {n2} 次（应为 2）")
+    if n2 != 2:
+        print("  !! 正常重复被误吞")
+        ok = False
+
+    # 正常横幅：停留 4 秒后彻底消失 -> 1 次
+    n3 = len(run([0.98] * 12 + [0.3] * 9 + [0.15] * 9, RELEASE_THRESHOLD))
+    print(f"  正常横幅: {n3} 次（应为 1）")
+    if n3 != 1:
+        print("  !! 正常横幅计数异常")
+        ok = False
+
+    # 向后兼容：不传 release_threshold 时行为等同旧版
+    if EventCounter(th).release_threshold != th:
+        print("  !! 默认构造改变了旧行为")
+        ok = False
+    return ok
 
 
 def main(argv: list[str] | None = None) -> int:
